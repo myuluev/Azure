@@ -1,0 +1,126 @@
+# Python to Linux Web App on Azure
+# Build your Python project and deploy it to Azure as a Linux Web App.
+# Change python version to one that's appropriate for your application.
+# https://docs.microsoft.com/azure/devops/pipelines/languages/python
+
+name: $(SourceBranchName)_$(date:yyyyMMdd)$(rev:.r)
+
+trigger:
+  - main
+
+variables:
+  # Web app name
+  webAppName: 'test-api'
+
+  # Web app type
+  webAppType: 'webAppLinux'
+
+  # Agent VM image name
+  vmImageName: 'ubuntu-latest'
+
+  # Environment name
+  environmentName: 'test-api'
+
+  # Project root folder. Point to the folder containing manage.py file.
+  projectRoot: $(System.DefaultWorkingDirectory)
+
+  # Python version: 3.8
+  pythonVersion: '3.8'
+
+  # Flask environment
+  FLASK_ENV: 'production'
+
+stages:
+
+  # -- testing
+  - stage: variables
+    displayName: 'Variable testing'
+    variables:
+      testing_variable: 'test variables'
+      var1: 'this is stage env'
+      var2: $[ contains(variables.var1,  'prod') ]
+      var3: $[ not(contains(variables.var1,  'prod')) ]
+      ${{ if not(eq(variables.var2, True)) }}:
+        var4: 'stage'
+      ${{ if eq(variables.var2, True) }}:
+        var4: 'prod'
+
+    jobs:
+      - job: job1
+        steps:
+          - bash: |
+              echo
+              echo "var1: $(var1)"
+              echo "var2: $(var2)"
+              echo "var3: $(var3)"
+              echo "var4: $(var4)"
+            displayName: $(testing_variable)
+          - bash: |
+              echo "Hello"
+            displayName: "echo hello"
+
+  # ---- CI - Test ----
+  - stage: Test
+    variables:
+      - group: test-api-py-tests
+      - group: auth-common_test
+    condition: succeeded()
+    dependsOn: variables
+    displayName: 'Test Flask App'
+    jobs:
+      - template: ./.azure/test-template.yaml
+
+  # ---- CI - Build ----
+  - stage: Build
+    condition: succeeded()
+    dependsOn: Test
+    displayName: 'Build Flask App'
+    jobs:
+      - template: ./.azure/build-template.yml
+
+  # ---- CD - Deploy ----
+  - stage: Deploy_DEV
+    variables:
+      - group: test-api_test
+      - group: auth-common_test
+    condition: succeeded()
+    dependsOn: Build
+    jobs:
+      - template: ./.azure/deployment-template.yml
+        parameters:
+          azureConnectionName: 'service_connection_test_environment'
+          appName: 'test-api-test'
+          environment: 'test environment'
+    displayName: 'Deploy to DEV environment'
+
+  - stage: Deploy_STAGE
+    variables:
+      - group: test-api_stage
+      - group: auth-common_stage
+    condition: succeeded()
+    dependsOn:
+      - Build
+      - Deploy_DEV
+    jobs:
+      - template: ./.azure/deployment-template.yml
+        parameters:
+          azureConnectionName: 'service_connection_stage_environment'
+          appName: 'test-api-stage'
+          environment: 'stage environment'
+    displayName: 'Deploy to stage environment'
+
+  - stage: Deploy_PROD
+    variables:
+      - group: test-api_prod
+      - group: auth-common_prod
+    condition: succeeded()
+    dependsOn:
+      - Build
+      - Deploy_STAGE
+    jobs:
+      - template: ./.azure/deployment-slot-template.yml
+        parameters:
+          azureConnectionName: 'service_connection_prod_environment'
+          appName: 'test-api-prod'
+          environment: 'prod environment'
+    displayName: 'Deploy to PROD environment'
